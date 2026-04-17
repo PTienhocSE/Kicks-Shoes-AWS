@@ -1,0 +1,213 @@
+name: Deploy Backend to ECS EC2
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/ecs-ec2-deployment
+    paths:
+      - backend/**
+      - backend/cloudformation/**
+      - .github/workflows/deploy-ecs-ec2.yml
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: ap-southeast-1
+  ECR_REPOSITORY: kicks-shoes-backend
+  ENVIRONMENT: dev
+
+jobs:
+  build-and-deploy:
+    name: Build and Deploy to ECS EC2
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+
+      - name: Get AWS Account ID
+        id: aws_account
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          echo "account_id=$ACCOUNT_ID" >> $GITHUB_OUTPUT
+
+      - name: Create ECR repository if not exists
+        run: |
+          aws ecr describe-repositories --repository-names ${{ env.ECR_REPOSITORY }} 2>/dev/null || \
+          aws ecr create-repository --repository-name ${{ env.ECR_REPOSITORY }} \
+            --image-scanning-configuration scanOnPush=true \
+            --encryption-configuration encryptionType=AES256
+
+      - name: Login to Amazon ECR
+        id: login_ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push image to ECR
+        id: build_image
+        env:
+          ECR_REGISTRY: ${{ steps.login_ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          IMAGE_URI=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker build -f backend/Dockerfile -t $IMAGE_URI -t $ECR_REGISTRY/$ECR_REPOSITORY:latest ./backend
+          docker push $IMAGE_URI
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          echo "image_uri=$IMAGE_URI" >> $GITHUB_OUTPUT
+
+      - name: Validate app configuration secret
+        env:
+          APP_CONFIG_SECRET: ${{ vars.APP_CONFIG_SECRET_NAME || 'kicks-shoes-dev/app-config' }}
+        run: |
+          if ! aws secretsmanager describe-secret --secret-id "$APP_CONFIG_SECRET" 2>/dev/null; then
+            echo "Error: Secret $APP_CONFIG_SECRET does not exist"
+            echo "Please create the secret with your app configuration"
+            exit 1
+          fi
+
+      - name: Deploy Network Stack
+        id: deploy_network
+        run: |
+          STACK_NAME="${{ env.ENVIRONMENT }}-network-stack"
+          
+          aws cloudformation deploy \
+            --template-file backend/cloudformation/01-network.yaml \
+            --stack-name $STACK_NAME \
+            --parameter-overrides \
+              EnvironmentName=${{ env.ENVIRONMENT }} \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --no-fail-on-empty-changeset \
+            --region ${{ env.AWS_REGION }}
+          
+          echo "Network stack deployed successfully"
+
+      - name: Get Certificate ARN (if custom domain enabled)
+        id: get_certificate
+        if: vars.ENABLE_CUSTOM_DOMAIN == 'true'
+        env:
+          DOMAIN_NAME: ${{ vars.DOMAIN_NAME || 'kicks-shoes.com' }}
+        run: |
+          CERT_ARN=$(aws acm list-certificates --region ${{ env.AWS_REGION }} \
+            --query "CertificateSummaryList[?DomainName=='$DOMAIN_NAME'].CertificateArn | [0]" \
+            --output text)
+          
+          if [ -z "$CERT_ARN" ] || [ "$CERT_ARN" = "None" ]; then
+            echo "Error: No certificate found for domain $DOMAIN_NAME"
+            echo "Please create an ACM certificate first"
+            exit 1
+          fi
+          
+          echo "certificate_arn=$CERT_ARN" >> $GITHUB_OUTPUT
+
+      - name: Deploy Application Stack
+        id: deploy_app
+        env:
+          APP_CONFIG_SECRET: ${{ vars.APP_CONFIG_SECRET_NAME || 'kicks-shoes-dev/app-config' }}
+          ENABLE_CUSTOM_DOMAIN: ${{ vars.ENABLE_CUSTOM_DOMAIN || 'false' }}
+          DOMAIN_NAME: ${{ vars.DOMAIN_NAME || '' }}
+          INSTANCE_TYPE: ${{ vars.INSTANCE_TYPE || 't3.small' }}
+          DESIRED_COUNT: ${{ vars.DESIRED_COUNT || '2' }}
+          MIN_CAPACITY: ${{ vars.MIN_CAPACITY || '1' }}
+          MAX_CAPACITY: ${{ vars.MAX_CAPACITY || '4' }}
+        run: |
+          STACK_NAME="${{ env.ENVIRONMENT }}-app-stack"
+          
+          PARAMS=(
+            "EnvironmentName=${{ env.ENVIRONMENT }}"
+            "ContainerImage=${{ steps.build_image.outputs.image_uri }}"
+            "AppConfigSecretName=$APP_CONFIG_SECRET"
+            "EnableCustomDomain=$ENABLE_CUSTOM_DOMAIN"
+            "InstanceType=$INSTANCE_TYPE"
+            "DesiredCount=$DESIRED_COUNT"
+            "MinCapacity=$MIN_CAPACITY"
+            "MaxCapacity=$MAX_CAPACITY"
+          )
+          
+          if [ "$ENABLE_CUSTOM_DOMAIN" = "true" ]; then
+            PARAMS+=("DomainName=$DOMAIN_NAME")
+            PARAMS+=("CertificateArn=${{ steps.get_certificate.outputs.certificate_arn }}")
+          fi
+          
+          aws cloudformation deploy \
+            --template-file backend/cloudformation/02-app.yaml \
+            --stack-name $STACK_NAME \
+            --parameter-overrides "${PARAMS[@]}" \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --no-fail-on-empty-changeset \
+            --region ${{ env.AWS_REGION }}
+          
+          echo "Application stack deployed successfully"
+
+      - name: Get Load Balancer URL
+        id: get_url
+        run: |
+          STACK_NAME="${{ env.ENVIRONMENT }}-app-stack"
+          LB_URL=$(aws cloudformation describe-stacks \
+            --stack-name $STACK_NAME \
+            --query "Stacks[0].Outputs[?OutputKey=='LoadBalancerURL'].OutputValue" \
+            --output text \
+            --region ${{ env.AWS_REGION }})
+          
+          echo "load_balancer_url=$LB_URL" >> $GITHUB_OUTPUT
+          echo "### Deployment Successful! 🚀" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Load Balancer URL:** $LB_URL" >> $GITHUB_STEP_SUMMARY
+          echo "**Image:** ${{ steps.build_image.outputs.image_uri }}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Wait for service to stabilize
+        run: |
+          CLUSTER_NAME="${{ env.ENVIRONMENT }}-cluster"
+          SERVICE_NAME="${{ env.ENVIRONMENT }}-backend-service"
+          
+          echo "Waiting for ECS service to stabilize..."
+          aws ecs wait services-stable \
+            --cluster $CLUSTER_NAME \
+            --services $SERVICE_NAME \
+            --region ${{ env.AWS_REGION }}
+          
+          echo "Service is stable and running!"
+
+      - name: Health check
+        run: |
+          LB_URL="${{ steps.get_url.outputs.load_balancer_url }}"
+          MAX_ATTEMPTS=30
+          ATTEMPT=0
+          
+          echo "Performing health check on $LB_URL/api/health"
+          
+          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+            if curl -f -s "$LB_URL/api/health" > /dev/null; then
+              echo "Health check passed!"
+              exit 0
+            fi
+            
+            ATTEMPT=$((ATTEMPT + 1))
+            echo "Attempt $ATTEMPT/$MAX_ATTEMPTS failed, retrying in 10 seconds..."
+            sleep 10
+          done
+          
+          echo "Health check failed after $MAX_ATTEMPTS attempts"
+          exit 1
+
+      - name: Deployment summary
+        if: success()
+        run: |
+          echo "=========================================="
+          echo "Deployment completed successfully!"
+          echo "=========================================="
+          echo "Environment: ${{ env.ENVIRONMENT }}"
+          echo "Region: ${{ env.AWS_REGION }}"
+          echo "Image: ${{ steps.build_image.outputs.image_uri }}"
+          echo "Load Balancer: ${{ steps.get_url.outputs.load_balancer_url }}"
+          echo "=========================================="
