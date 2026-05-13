@@ -1,27 +1,27 @@
 output "vpc_id" {
-  value = module.vpc.vpc_id
+  value = data.aws_vpc.default.id
 }
 
 output "vpc_cidr" {
-  value = module.vpc.vpc_cidr_block
+  value = data.aws_vpc.default.cidr_block
 }
 
 output "public_subnet_ids" {
-  value = module.vpc.public_subnets
+  value = data.aws_subnets.default.ids
 }
 
 output "private_subnet_ids" {
-  value = module.vpc.private_subnets
+  value = data.aws_subnets.default.ids
 }
 
 output "db_subnet_ids" {
-  value = module.vpc.database_subnets
+  value = data.aws_subnets.default.ids
 }
 
 output "db_subnet_group_name" {
-  value = module.vpc.database_subnet_group_name
+  value = ""
 }
 
 output "nat_public_ips" {
-  value = module.vpc.nat_public_ips
+  value = [] 
 }

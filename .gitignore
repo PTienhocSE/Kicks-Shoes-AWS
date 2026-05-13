@@ -1,80 +1,24 @@
-# Dependencies
-node_modules/
-/.pnp
-.pnp.js
-
-# Testing
-/coverage
-
-# Production
-/build
-/dist
-
-# Environment files
-.env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-frontend/.env.production
-
-# Debug logs
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# IDE specific files
-.idea/
-.vscode/
-*.swp
-*.swo
-
-# OS generated files
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
-
-# Frontend specific
-frontend/node_modules/
-frontend/dist/
-frontend/.vite/
-
-# Backend specific
-backend/node_modules/
-backend/dist/
-backend/.env 
-# Security: Prevent committing sensitive files
-*.env
-*.env.*
-!.env.example
-!.env.template
-*.pem
+﻿# AWS Credentials & Secrets
+*.csv
 *.key
+*.pem
 *.p12
 *.pfx
-id_rsa*
-id_dsa*
-*.crt
-*.cert
-secrets/
-credentials/
-ket.md
-*.tfvars
-*.tfvars.json
-.aws/
+*secret*.json
+*credentials*.json
+*password*.json
+*accessKeys*
+*.kms
 
 # Terraform
-**/.terraform/
-*.tfstate
-*.tfstate.*
-*.tfplan
-terraform.tfvars
-override.tf
-override.tf.json
-*_override.tf
-*_override.tf.json
+.terraform/
 .terraform.lock.hcl
+terraform.tfstate
+terraform.tfstate.backup
+*.tfstate*
+.env
+.env.local
+
+# Environment vars
+.aws/
+~/.aws/

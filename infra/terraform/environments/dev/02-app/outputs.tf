@@ -22,10 +22,10 @@ output "s3_uploads_bucket" {
   value = module.s3_uploads.s3_bucket_id
 }
 
-output "redis_endpoint" {
+/* output "redis_endpoint" {
   value     = module.elasticache.cluster_cache_nodes[0].address
   sensitive = true
-}
+} */
 
 output "cognito_user_pool_id" {
   value = aws_cognito_user_pool.main.id

@@ -188,7 +188,7 @@ module "alb" {
   source  = "terraform-aws-modules/alb/aws"
   version = "~> 9.0"
 
-  name               = "${var.project_name}-alb"
+  name               = "${var.project_name}-alb-w5"
   load_balancer_type = "application"
   vpc_id             = local.vpc_id
   subnets            = local.public_subnet_ids
@@ -263,7 +263,7 @@ module "dynamodb_chat" {
   source = "../../../modules/dynamodb"
 
   project_name = var.project_name
-  table_name   = "${var.project_name}-table"  # For compatibility with existing module
+  table_name   = "${var.project_name}-table-w5"
   
   tags = local.common_tags
 }
@@ -292,6 +292,7 @@ module "s3_uploads" {
   tags = local.common_tags
 }
 
+/*
 module "elasticache" {
   source  = "terraform-aws-modules/elasticache/aws"
   version = "~> 1.0"
@@ -314,6 +315,7 @@ module "elasticache" {
 
   tags = local.common_tags
 }
+*/
 
 module "ecs_service" {
   source  = "terraform-aws-modules/ecs/aws//modules/service"
@@ -636,8 +638,8 @@ resource "aws_cloudwatch_metric_alarm" "ecs_cpu_high" {
 # Create placeholder zip file if it doesn't exist
 resource "null_resource" "lambda_placeholder" {
   provisioner "local-exec" {
-    command = "if [ ! -f ../../../lambda-placeholder.zip ]; then echo 'placeholder' | zip ../../../lambda-placeholder.zip -; fi"
-    interpreter = ["bash", "-c"]
+    command = "if (-not (Test-Path ../../../lambda-placeholder.zip)) { Set-Content -Path placeholder.txt -Value 'placeholder'; Compress-Archive -Path placeholder.txt -DestinationPath ../../../lambda-placeholder.zip }"
+    interpreter = ["powershell", "-Command"]
   }
 }
 
